@@ -1,161 +1,203 @@
-import ctypes as cts
 import sys
 import os
 import tempfile
+import posixpath
 from PyQt6.QtWidgets import QApplication, QMainWindow, QDialog, QFileDialog, QMessageBox
 #from PyQt6 import uic
 from simple_gui import Ui_simple_tool
+import subprocess
 
 
+"""helps to deal with paths that appear when using Pyinstaller"""
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
 
 
+"""helps to initialise our dll and load it in our application|DEPRECATED
 def OSSL_dll_init():
     dll_path = resource_path("OpensslGOST_cms_wrapper.dll")
-    LIBCRYPTO = dll_path
-    rev_crypto = cts.windll.LoadLibrary(LIBCRYPTO)
-    return rev_crypto
+    return cts.windll.LoadLibrary(dll_path)"""
 
 
-def OSSL_dll_cms_encrypt(cert, in_file, ciphername):
+"""
+encrypts any content in cms format
+cert - is the pathname of the certificate (pubkey) we use to encrypt with
+in_file - is the pathname of the file we want to encrypt
+ciphername - is the name of the ciphers, but rn it works only with GOST (russian standard cryptography) ciphers|DEPRECATED
+def OSSL_dll_cms_encrypt(cert: bytes, in_file: bytes, ciphername: bytes):
+    #get pointer to dll itself
     rev_crypto = OSSL_dll_init()
-    rev_crypto.cms_encrypt.argtypes = [cts.c_void_p, cts.c_void_p, cts.c_void_p]
-    rev_crypto.cms_encrypt.restype = cts.c_int
-    p1 = cts.c_char_p(bytes(cert, "utf-8"))
-    p2 = cts.c_char_p(bytes(in_file, "utf-8"))
+    #in dll there is a variardic function called operations_handler, we now explicitly set which arguments it gets
+    rev_crypto.operations_handler.argtypes = [cts.c_int, cts.c_void_p, cts.c_int, cts.c_void_p, cts.c_void_p,
+                                              cts.c_void_p]
+    #we set the return type of a fucntion
+    rev_crypto.operations_handler.restype = cts.c_int
+    #number of arguments in variardic functions (excluding argnum itself)
+    argnum = cts.c_int(5)
+    #path to config file for openssl dll which we call ossl.cnf
+    cnf_path = cts.c_char_p(resource_path("ossl.cnf").encode("utf-8"))
+    print(f"IN ENCRYPT HANDLER:path to conf = {resource_path('ossl.cnf')}")
+    #cmd name is the number of command. 1 - cms_encrypt, 2 - decrypt, 3 - show_available_tls_ciphers
+    #Look up code for my dll to look all available options
+    cmd_name = cts.c_int(1) #cms_encrypt
+    #cast python strings to c_types char pointer
+    p1 = cts.c_char_p(cert)
+    p2 = cts.c_char_p(in_file)
+    p3 = cts.c_char_p(ciphername)
+    #now cast char pointers to void pointers and pass it onto dll function
+    cts.cast(cnf_path, cts.c_void_p)
     cts.cast(p1, cts.c_void_p)
     cts.cast(p2, cts.c_void_p)
-    return rev_crypto.cms_encrypt(p1, p2, "ciphername")
+    cts.cast(p3, cts.c_void_p)
+    return rev_crypto.operations_handler(argnum, cnf_path, cmd_name, p1, p2, p3)"""
 
 
-def OSSL_dll_cms_decrypt(pkey, in_file):
+"""
+decrypts any content in cms format
+pkey - is the pathname of the private key we use to decrypt encrypted cms with pubkey
+in_file - is the pathname of the file we want to decrypt|DEPRECATED
+def OSSL_dll_cms_decrypt(pkey: bytes, in_file: bytes):
+    #if you want to understand how dll works look up comments in def OSSL_dll_cms_encrypt(cert, in_file, ciphername):
     rev_crypto = OSSL_dll_init()
-    rev_crypto.cms_decrypt.argtypes = [cts.c_void_p, cts.c_void_p]
-    rev_crypto.cms_decrypt.restype = cts.c_int
-    p1 = cts.c_char_p(bytes(pkey, "utf-8"))
-    p2 = cts.c_char_p(bytes(in_file, "utf-8"))
+    print("PYTHON:IN DECRYPT HANDLER")
+    rev_crypto.operations_handler.argtypes = [cts.c_int, cts.c_void_p, cts.c_int, cts.c_void_p, cts.c_void_p]
+    rev_crypto.operations_handler.restype = cts.c_int
+    argnum = cts.c_int(4)
+    cnf_path = cts.c_char_p(resource_path("ossl.cnf").encode("utf-8"))
+    print(f"path to ossl_conf = {resource_path('ossl.cnf')}")
+    cmd_name = cts.c_int(2) #cms_decrypt
+    p1 = cts.c_char_p(pkey)
+    p2 = cts.c_char_p(in_file)
+    cts.cast(cnf_path, cts.c_void_p)
     cts.cast(p1, cts.c_void_p)
     cts.cast(p2, cts.c_void_p)
-    return rev_crypto.cms_decrypt(p1, p2)
+    return rev_crypto.operations_handler(argnum, cnf_path, cmd_name, p1, p2)"""
 
 
+"""shows all available tls_ciphers|DEPRECATED
+def OSSL_dll_show_tls_ciphers():
+    # if you want to understand how dll works look up comments in def OSSL_dll_cms_encrypt(cert, in_file, ciphername):
+    rev_crypto = OSSL_dll_init()
+    rev_crypto.operations_handler.argtypes = [cts.c_int, cts.c_void_p, cts.c_int]
+    rev_crypto.operations_handler.restype = cts.c_int
+    argnum = cts.c_int(2)
+    cnf_path = cts.c_char_p(bytes(resource_path("ossl.cnf"), "utf-8"))
+    cmd_name = cts.c_int(3)  # show_tls_ciphers
+    cts.cast(cnf_path, cts.c_void_p)
+    return rev_crypto.operations_handler(argnum, cnf_path, cmd_name)"""
+
+"""Fill file with zeroes, to secure keys from leaking"""
+def zero_fill(filename):
+    with open(filename, "r+") as file:
+        old = file.read()
+        file.seek(0)
+        for line in old.splitlines():
+            file.write("0" * len(line))
+
+
+
+"""
+Class for main application in portable mode, "ready to use"
+Here Private key, certificate and cipher is already hardcoded
+"""
 class Encryptor(QDialog, Ui_simple_tool):
-    chosen_file = ""
+    chosen_file = "From_Dato_With_Love"
+    #created using gost2012_256
     PRIVATE_KEY_AS_STRING = "-----BEGIN PRIVATE KEY-----\n\
-MEYCAQAwHwYIKoUDBwEBAQEwEwYHKoUDAgIjAQYIKoUDBwEBAgIEIDFgA7CXw2gN\n\
-boA824Zdj3PalWzVEO9IKFNkXnWZ736r\n\
+MEYCAQAwHwYIKoUDBwEBAQEwEwYHKoUDAgIjAQYIKoUDBwEBAgIEIHRapkdXQDVM\n\
+40WTP7nk4hAADorBGeF6ZygU6H2nWyM2\n\
 -----END PRIVATE KEY-----\n\
 "
     CERTIFICATE_AS_STRING = "-----BEGIN CERTIFICATE-----\n\
-MIICFjCCAcGgAwIBAgIJAICCAucev9drMAwGCCqFAwcBAQMCBQAwYTELMAkGA1UE\n\
-BhMCR0UxCzAJBgNVBAgMAkdFMQswCQYDVQQHDAJHRTELMAkGA1UECgwCR0UxCzAJ\n\
-BgNVBAsMAkdFMQswCQYDVQQDDAJHRTERMA8GCSqGSIb3DQEJARYCR0UwHhcNMjMw\n\
-NTMwMTUyNjE5WhcNMjQwNTI5MTUyNjE5WjBhMQswCQYDVQQGEwJHRTELMAkGA1UE\n\
-CAwCR0UxCzAJBgNVBAcMAkdFMQswCQYDVQQKDAJHRTELMAkGA1UECwwCR0UxCzAJ\n\
-BgNVBAMMAkdFMREwDwYJKoZIhvcNAQkBFgJHRTBmMB8GCCqFAwcBAQEBMBMGByqF\n\
-AwICIwEGCCqFAwcBAQICA0MABEA1ZLPyVB1NNQxg0nxd+PIPEJQSkx9Pv1qIYy1s\n\
-viRb/etHFyFeHtUNlQ4anQX9o1iRYVB/6eXZR9xiZb6a4+k5o1MwUTAdBgNVHQ4E\n\
-FgQUitmQNrU0ioO1fYr31tmKpC4Am/YwHwYDVR0jBBgwFoAUitmQNrU0ioO1fYr3\n\
-1tmKpC4Am/YwDwYDVR0TAQH/BAUwAwEB/zAMBggqhQMHAQEDAgUAA0EAsysfTh0U\n\
-JMP9p5j+G1/2cMjbDVNQSm03HqEA3x4CL6vIwXTClKTFzneN+m35FaviAygI5mnl\n\
-9FYtbH0UUEKn+w==\n\
------END CERTIFICATE-----\n\
-"
-    RSA_KEY = "-----BEGIN PRIVATE KEY-----\n\
-MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDkGj0TEz9Oafi4\n\
-dehP5X2n7rpinNtb+GWdqqTQBwkiCg0IJ5MwZsV7+szmrlGz1cExyqMvrWuq9Fwb\n\
-8M5ImR3cmLqkJZDgw+36r1SFMwOC6FZhE8kPhb4nM165DH1fhUL/FYp8e6AFrfjx\n\
-5Z9GtaWZkE/JR75ufZ+3XDpy+cW7cOzkMLTaLR9PZiQ1+iPA/DlAqsoh9urzVE4m\n\
-7M2g7nN3cSXYmvnFoBokxIBohG7eud79MNsA4SXw/h9tecKM1wY5SoTl7KOOM8YO\n\
-RKdyi4CY8eDnKkjoV3LKcXBYEWdYJ787ljkoHk4AajYwjrUwPWnikHQ4zklDxndW\n\
-wNHJxuGdAgMBAAECggEADPzPeGwSoTDYeAxCl3X+IxctJps+xCxPANyr+KpF41nG\n\
-Jy41q75WRTpg+0t2nHIxx1d91iOeK0QxkGe0Hx8Uu7A4hEsdRibxwGHGQrVGYGhB\n\
-LtLVElyvmITMwmWLJ+qrB2IfGfpiAKDIuWE1Ie4KyUUVveSnW5wsgWCvdUdycjse\n\
-xIvrEU8RVAGImOsq8cg+GkBH/WesoY1m60o4+8aghxI2oqc5Q2o7r0sjyamrGPQE\n\
-X5b2vH3lGLWec7hW2G5KJ3PePFWDEs6V96OGJdC/qO8OYSmPxlJVxFf4OjrZXzig\n\
-pK/pUmgxBZNHe68bDRs6VLM2TVIbziHiAvRZkByZkQKBgQD0/99MzHcW212MEQPD\n\
-IHFf+Nn39zeemFlk8PCTvaQmh+nOkcYywHTIagHfEHvGnx3cD6ZXIJPPENk5imum\n\
-fYshEaJXmmB0LdwmgDgkBCY9zUuAtfct9Rqk2qKS/9MX78Jyke3BX+70Eqgzpnis\n\
-lOWfLZkhX2XNmk1xmd+C0totRQKBgQDuWCUdMJZli5vh5e4wQ5HR8LH3aCM4GfCw\n\
-1q7a53eyQHdXfdy1AHhSWFu3jRpW6KUCtvoUOXIJe1kyxR+Qq4BE8gGXPemY50cS\n\
-E2IueY0Nt4il8td0AfIfJyf6URGkKiL3tT+jfvK1kR7LWV7OuU3h+A8YXHM2C6sG\n\
-kn3dOEtMeQKBgQDpYXh4Mulal5qUG30m+hel4WrZH+EWrW+yjSXOxr7AiYW6ZfiU\n\
-TeqxIvInaA9QVDBgeXPt2TWT8SvL+US0szC+TosDwiYRZcIp1sgj3uQCyTYcJLqS\n\
-R8KauT5Wo2WVjqn+8221YEpCrCcYFIMteyUFLa2KMdLLOSp+haJ5f5uftQKBgQCd\n\
-GTJVXBo1kmDL898cptztkQXsuhJEvyxbkxWrqdfGgSFoZMhd8ZJdTGofwPy0fiGN\n\
-eYe6XubggxIXGcElfTVNvGn6A0/+farlqisT0QB9IxUJtNf4WfP6PrfmERtcpn1n\n\
-4mqw3FMkBCRVCnIoNhG0uOlSOFWkMOqoqVQWxS00mQKBgQDoIX20DgpXlFjcsgXx\n\
-bXQLOESwdz62Q6LWqg6y3uZXsoNRF36Ga0hVilUgJ6cn/zrFYLkKtMFvvZjuz1zm\n\
-dM0qZRQIUykRFmoKo6HOJdM2aCT/6eeFkvqLmvVBsMfCAUUrEdSsWxoLR7yhnWNk\n\
-fZOAUth5xCpkNjaZNZmRzemqig==\n\
------END PRIVATE KEY-----\n\
-"
-    RSA_CERT = "-----BEGIN CERTIFICATE-----\n\
-MIIDcTCCAlmgAwIBAgIULDoJUnqmWqa4MhNIcdxHdL9RmYYwDQYJKoZIhvcNAQEL\n\
-BQAwYTELMAkGA1UEBhMCQVUxCzAJBgNVBAgMAkFVMQswCQYDVQQHDAJBVTELMAkG\n\
-A1UECgwCQVUxCzAJBgNVBAsMAkFVMQswCQYDVQQDDAJBVTERMA8GCSqGSIb3DQEJ\n\
-ARYCQVUwHhcNMjMwNzA3MTMwNDMzWhcNMjQwNzA2MTMwNDMzWjBhMQswCQYDVQQG\n\
-EwJBVTELMAkGA1UECAwCQVUxCzAJBgNVBAcMAkFVMQswCQYDVQQKDAJBVTELMAkG\n\
-A1UECwwCQVUxCzAJBgNVBAMMAkFVMREwDwYJKoZIhvcNAQkBFgJBVTCCASIwDQYJ\n\
-KoZIhvcNAQEBBQADggEPADCCAQoCggEBAOQaPRMTP05p+Lh16E/lfafuumKc21v4\n\
-ZZ2qpNAHCSIKDQgnkzBmxXv6zOauUbPVwTHKoy+ta6r0XBvwzkiZHdyYuqQlkODD\n\
-7fqvVIUzA4LoVmETyQ+FviczXrkMfV+FQv8Vinx7oAWt+PHln0a1pZmQT8lHvm59\n\
-n7dcOnL5xbtw7OQwtNotH09mJDX6I8D8OUCqyiH26vNUTibszaDuc3dxJdia+cWg\n\
-GiTEgGiEbt653v0w2wDhJfD+H215wozXBjlKhOXso44zxg5Ep3KLgJjx4OcqSOhX\n\
-cspxcFgRZ1gnvzuWOSgeTgBqNjCOtTA9aeKQdDjOSUPGd1bA0cnG4Z0CAwEAAaMh\n\
-MB8wHQYDVR0OBBYEFFHbErm+RrAfE7WrZKU3xdqzxjVNMA0GCSqGSIb3DQEBCwUA\n\
-A4IBAQA9wM4egFjhlD/8q2S86ilGG9fJUJdLiwe8t/NT6jAjY7ukRVIBL25/UeHs\n\
-ZwTCVYx2+vJX8Mz/3+sWsCCK1OiXHOsRq0nmybhR60tgqDVLi53xJ/1oJvfDZT3V\n\
-s7D16jn0+9UjQmKSKV2BBP5QBmkgwsV498Dhhov64ZpkaLxeKBXYFdw/LuBiBn81\n\
-diYgxAlMzmqwUTEX9P/Hknwg+kPJ+hjD4YDqDLYO6xNJCWE6Qw1eQ73P+dZIDRVU\n\
-pOXrBKQvP10ogoWtVzC1e7AyfAZNOJTyWSttRdMnpUWqWdcEq2OIR9xdQjl6VOqY\n\
-2L+Bmr3cdl28Ic4w8ojpNuLV01CU\n\
+MIICITCCAcygAwIBAgIUKQT02fYjQOslDsLOJXQDO/UoCjgwDAYIKoUDBwEBAwIF\n\
+ADBhMQswCQYDVQQGEwJHRzELMAkGA1UECAwCR0cxCzAJBgNVBAcMAkdHMQswCQYD\n\
+VQQKDAJHRzELMAkGA1UECwwCR0cxCzAJBgNVBAMMAkdHMREwDwYJKoZIhvcNAQkB\n\
+FgJHRzAeFw0yMzA3MTMxMjA2MjhaFw0yMzA4MTIxMjA2MjhaMGExCzAJBgNVBAYT\n\
+AkdHMQswCQYDVQQIDAJHRzELMAkGA1UEBwwCR0cxCzAJBgNVBAoMAkdHMQswCQYD\n\
+VQQLDAJHRzELMAkGA1UEAwwCR0cxETAPBgkqhkiG9w0BCQEWAkdHMGYwHwYIKoUD\n\
+BwEBAQEwEwYHKoUDAgIjAQYIKoUDBwEBAgIDQwAEQBoSZiIAIV8C2NK8fjatwFp9\n\
+OIhRNykOgVvKdKTS2Yux+OuWdIrxzY9QW7PfTTF2Oz/OUNpA4I7JRzXlcEJnFcOj\n\
+UzBRMB0GA1UdDgQWBBTtpztXS59WAcoplUcJT6vM2ioQpDAfBgNVHSMEGDAWgBTt\n\
+pztXS59WAcoplUcJT6vM2ioQpDAPBgNVHRMBAf8EBTADAQH/MAwGCCqFAwcBAQMC\n\
+BQADQQDB+OqkeMQbH2TlStkrKoYBhjqsTLVUVJKGFZCiYnYBLvBSsc/81zhyxTfj\n\
+k7UofpbqnKBen6YihqkpFdtIKV4R\n\
 -----END CERTIFICATE-----\n\
 "
 
     def __init__(self):
+        #init ui
         QDialog.__init__(self)
         self.setupUi(self)
+        #init buttons and their clicked events
+        self.label_execute.setEnabled(False)
         self.label_choose.clicked.connect(self.browsefiles)
         self.label_execute.clicked.connect(self.execution)
+        #make openssl.exe load OUR config
+        os.environ["OPENSSL_CONF"] = resource_path("ossl.cnf")
+        #show ui
         self.show()
 
+    """browse and choose files to encrypt or decrypt"""
     def browsefiles(self):
-        dialog = QFileDialog()
-        fname = dialog.getOpenFileName(self, 'Select file')
+        dialog = QFileDialog()#opens up browse file dialog
+        fname = dialog.getOpenFileName(self, 'Select file')#gets selected file from the dialog
         self.label_filename.setText(fname[0])
         self.chosen_file = fname[0]
         if self.chosen_file.rfind(".enc") > 0:
             self.label_execute.setText("Расшифровать")
         else:
             self.label_execute.setText("Зашифровать")
+        self.label_execute.setEnabled(True)
 
+    """execute encryption or decryption"""
     def execution(self):
         pathname = str(self.chosen_file)
         if pathname.rfind(".enc") > 0:
-            pkey = tempfile.NamedTemporaryFile(delete=False)
-            pkey.write(bytes(self.RSA_KEY, "utf-8"))
-            pkey.close()
-            res = OSSL_dll_cms_decrypt(pkey.name, pathname)
-            if res == 0:
-                QMessageBox.information(self, 'DECRYPTED', "SUCCESS")
-            else:
-                QMessageBox.information(self, 'Error', "Something went wrong while decrypting")
-            os.unlink(pkey.name)
+            try:
+                pkey = tempfile.NamedTemporaryFile(suffix='.pem', prefix='RVZ', mode="w+t", delete=False)
+                pkey.write(self.PRIVATE_KEY_AS_STRING)
+                pkey.flush()
+                pkey.close()
+                pkeypath = str(pkey.name).replace(os.sep, posixpath.sep)
+                cipher = "gost89"#name of the symmetric cipher, there are others in GOST-engine
+                ossl_exe = resource_path("OpenSSL/bin/openssl.exe")
+                proc = subprocess.getstatusoutput(f"{ossl_exe} cms -decrypt -in {pathname} -{cipher} -out {pathname + '.dec'} -inform PEM -inkey {pkeypath} -binary")
+                print("Process  output: ", str(proc[1]))
+                exitcode = proc[0]
+                if exitcode == 0:
+                    QMessageBox.information(self, 'DECRYPTED', "SUCCESS")
+                else:
+                    QMessageBox.information(self, 'Error', "Something went wrong while decrypting")
+                zero_fill(pkey.name)
+                os.unlink(pkey.name)
+            except Exception as exc:
+                print("Some exception has occured, try to make sure the files are fine and they exist."
+                      "Exeption: ", exc)
         else:
-            cert = tempfile.NamedTemporaryFile(delete=False)
-            cert.write(bytes(self.RSA_CERT, "utf-8"))
-            cert.close()
-            res = OSSL_dll_cms_encrypt(cert.name, pathname, "ciphername")
-            if res == 0:
-                QMessageBox.information(self, 'ENCRYPTED', "SUCCESS")
-            else:
-                QMessageBox.information(self, 'Error', "Something went wrong while encrypting")
-            os.unlink(cert.name)
-
+            try:
+                cert = tempfile.NamedTemporaryFile(suffix='.pem', prefix='RVZ', mode="w+t", delete=False)
+                cert.write(self.CERTIFICATE_AS_STRING)
+                cert.flush()
+                cert.close()
+                certpath = str(cert.name).replace(os.sep, posixpath.sep)
+                cipher = "gost89"
+                ossl_exe = resource_path("OpenSSL/bin/openssl.exe")
+                proc = subprocess.getstatusoutput(f"{ossl_exe} cms -encrypt -in {pathname} -{cipher} -out {pathname + '.enc'} -inform PEM -recip {certpath} -outform PEM -binary")
+                print("Process  output: ", str(proc[1]))
+                exitcode = proc[0]
+                if exitcode == 0:
+                    QMessageBox.information(self, 'ENCRYPTED', "SUCCESS")
+                else:
+                    QMessageBox.information(self, 'Error', "Something went wrong while encrypting")
+                zero_fill(cert.name)
+                os.unlink(cert.name)
+            except Exception as exc:
+                print("Some exception has occured, try to make sure the files are fine and they exist."
+                      "Exeption: ", exc)
+        self.chosen_file = ""
+        self.label_execute.setEnabled(False)
 
 '''class EncryptorEXT(QMainWindow):
     def __init__(self):
@@ -180,11 +222,13 @@ pOXrBKQvP10ogoWtVzC1e7AyfAZNOJTyWSttRdMnpUWqWdcEq2OIR9xdQjl6VOqY\n\
 if __name__ == '__main__':
     print("Python {:s} {:03d}bit on {:s}\n".format(" ".join(elem.strip() for elem in sys.version.split("\n")),
                                                    64 if sys.maxsize > 0x100000000 else 32, sys.platform))
-    cts.windll.kernel32.SetDllDirectoryW(None)
-    app = QApplication(sys.argv)
+    app = QApplication(sys.argv)#Get system arguments and init QT_class
     if "-extended" in sys.argv:
         pass
         #extended_window = EncryptorEXT()
     else:
         encryptor_window = Encryptor()
     sys.exit(app.exec())
+
+
+
